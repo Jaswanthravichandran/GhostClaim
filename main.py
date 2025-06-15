@@ -7,3 +7,5 @@ if __name__ == "__main__":
     enum = SubdomainEnumerator(domain, wordlist, threads=30)
     enum.enumerate()
     enum.save_to_file()
+
+    
