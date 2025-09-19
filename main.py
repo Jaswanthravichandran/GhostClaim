@@ -1,7 +1,7 @@
 from SubEnum import SubdomainEnumerator
 
 if __name__ == "__main__":
-    domain = "logitech.com"
+    domain = "example.com"
     wordlist = "list.txt"
 
     enum = SubdomainEnumerator(domain, wordlist, threads=30)
