@@ -1,4 +1,5 @@
 import requests 
+import dns.resolver
 
 class SubdomainTakeover:
 
@@ -69,18 +70,27 @@ class SubdomainTakeover:
     }
 
 
-    def __init__(self, subdomain_file):
+    def __init__(self, subdomain_file, log_txt_file, vuln_domain):
         self.subdomain_file = subdomain_file
+        self.log_txt = log_txt_file
+        self.vuln_domain = vuln_domain
 
     def _fetch_response(self, domain):
         try:
-            r = requests.get(f"https://{domain}", timeout=5)
-            response = r.text
-            status_code = r.status_code
-            return status_code, response
-        
+            url = f"https://{domain}"
+            r = requests.get(url, timeout=5)
+            return r.status_code, r.text
         except requests.RequestException as e:
             return None, str(e)
+
+    def _check_cname(self, domain):
+        try:
+            answers = dns.resolver.resolve(domain, 'CNAME')
+            for rdata in answers:
+                cname_target = str(rdata.target).rstrip('.')
+                return cname_target
+        except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.resolver.Timeout, dns.exception.DNSException):
+            return None
 
     def _detect_takeover(self, response):
         for service, fingerprint in self.FINGERPRINTS.items():
@@ -92,22 +102,42 @@ class SubdomainTakeover:
         try:
             with open(self.subdomain_file, "r") as file:
                 subdomains = file.readlines()
-
+            with open(self.log_txt, "w") as log_file, open(self.vuln_domain, "w") as vuln_log:
                 for sub in subdomains:
                     sub = sub.strip()
                     print(f"{self.CYAN}[~] Scanning: {sub}{self.RESET}")
+
+                    cname_target = self._check_cname(sub)
+                        
+                    if cname_target:
+                        print(f"{self.GREEN}    [+] CNAME → {cname_target}{self.RESET}")
+                        if any(keyword in cname_target for keyword in [
+                            "github.io", "herokuapp.com", "amazonaws.com", "vercel.app", "readthedocs.io"
+                        ]):
+                            print(f"{self.RED}    [!] CNAME points to potential vulnerable host: {cname_target}{self.RESET}")
+                            log_file.write(f"{self.RED}    [!] CNAME points to potential vulnerable host: {cname_target}{self.RESET}\n")
+
                     status_code, response = self._fetch_response(sub)
 
-                    if status_code and response:
+                    if status_code:
                         vulnerable, service = self._detect_takeover(response)
                         if vulnerable:
-                            print(f"{self.RED}[!] Potential Subdomain Takeover on {sub} via {service}{self.RESET}")
+                            print(f"{self.RED}    [!] Fingerprint matched → Potential Subdomain Takeover via {service}{self.RESET}")
+                            log_file.write(f"{self.RED}    [!] Fingerprint matched → Potential Subdomain Takeover via {service}{self.RESET}\n")
+                            vuln_log.write(sub + "\n")
+                        elif status_code in [404, 410, 301, 503, 502]:
+                            print(f"{self.YELLOW}    [!] Status Code {status_code} → Might be unclaimed (manual check recommended){self.RESET}")
+                            log_file.write(f"{self.YELLOW}    [!] Status Code {status_code} → Might be unclaimed (manual check recommended){self.RESET}\n")
+                            vuln_log.write(sub + "\n")
                         else:
-                            print(f"{self.GREEN}[-] {sub} seems safe.{self.RESET}")
+                            print(f"{self.GREEN}    [-] {sub} looks safe (HTTP {status_code}){self.RESET}")
+                            log_file.write(f"{self.GREEN}    [-] {sub} looks safe (HTTP {status_code}){self.RESET}")
                     else:
-                        print(f"{self.RED}[x] Failed to connect to {sub}{self.RESET}")
+                        #print(f"{self.RED}    [x] Failed to connect to {sub} - {response}{self.RESET}")
+                        log_file.write(f"{self.RED}    [x] Failed to connect to {sub} - {response}{self.RESET}")
+
         except FileNotFoundError:
-            print(f"{self.RED}[-] Wordlist not found: {self.subdomain_file}{self.RESET}")
+            print(f"{self.RED}[-] Subdomain file not found: {self.subdomain_file}{self.RESET}")
         except Exception as e:
             print(f"{self.RED}[-] Unexpected error: {e}{self.RESET}")
 
